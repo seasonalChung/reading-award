@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="閱讀領獎名單整理", layout="wide")
-st.title("📚 閱讀領獎自動化系統 (全名單合併版)")
+st.title("📚 閱讀領獎自動化系統 (全名單合併修正版)")
 
 uploaded_file = st.file_uploader("請上傳 Excel 檔案", type=["xlsx"])
 
@@ -25,7 +25,7 @@ if uploaded_file:
                 df = df.dropna(how='all')
                 
                 if target_col in df.columns:
-                    # 統一處理姓名去空格
+                    # 統一處理姓名
                     df[target_col] = df[target_col].astype(str).str.strip()
                     
                     # 重新命名區間本數
@@ -33,7 +33,7 @@ if uploaded_file:
                     if "區間本數" in df.columns:
                         df = df.rename(columns={"區間本數": new_vol_name})
                     
-                    # 挑選必要欄位
+                    # 挑選該分頁現有的必要欄位
                     keep = [target_col, class_col, no_col]
                     if new_vol_name in df.columns: keep.append(new_vol_name)
                     current_df = df[[c for c in keep if c in df.columns]].copy()
@@ -41,31 +41,27 @@ if uploaded_file:
                     if result_df is None:
                         result_df = current_df
                     else:
-                        # --- 核心修改：改用 outer join (外部合併) ---
-                        # 這樣只要在任一分頁出現過的姓名都會被留下來
-                        result_df = pd.merge(result_df, current_df, on=target_col, how='outer')
+                        # 使用 outer join 合併，並自定義後綴以利辨識
+                        result_df = pd.merge(result_df, current_df, on=target_col, how='outer', suffixes=('', '_drop'))
                         
-                        # 合併後，若原本沒班級/座號的人，從新分頁補齊
-                        if f"{class_col}_y" in result_df.columns:
-                            result_df[class_col] = result_df[class_col].fillna(result_df[f"{class_col}_y"])
-                            result_df[no_col] = result_df[no_col].fillna(result_df[f"{no_col}_y"])
-                            # 移除多餘的暫存欄位
-                            result_df = result_df.drop(columns=[f"{class_col}_y", f"{no_col}_y", f"{class_col}_x", f"{no_col}_x"], errors='ignore')
-                        elif f"{class_col}_x" in result_df.columns:
-                             # 處理只有 x 的情況
-                             result_df = result_df.rename(columns={f"{class_col}_x": class_col, f"{no_col}_x": no_col})
+                        # 如果出現了重複的班級/座號，用新資料補齊舊資料的空缺
+                        if f"{class_col}_drop" in result_df.columns:
+                            result_df[class_col] = result_df[class_col].fillna(result_df[f"{class_col}_drop"])
+                            result_df[no_col] = result_df[no_col].fillna(result_df[f"{no_col}_drop"])
+                            # 刪除帶有後綴的冗餘欄位
+                            result_df = result_df.drop(columns=[f"{class_col}_drop", f"{no_col}_drop"])
 
             if result_df is not None and not result_df.empty:
-                # 找出所有本數欄位並處理數值
+                # 找出所有本數欄位
                 vol_cols = [c for c in result_df.columns if "區間本數" in c]
                 for v in vol_cols:
                     result_df[v] = pd.to_numeric(result_df[v], errors='coerce').fillna(0)
 
-                # 確保班級座號沒有空值（避免排序出錯）
-                result_df[class_col] = result_df[class_col].fillna("未註記")
+                # 確保班級與座號有基礎值
+                result_df[class_col] = result_df[class_col].fillna("未知")
                 result_df[no_col] = result_df[no_col].fillna(0)
 
-                # 領獎邏輯
+                # 領獎邏輯計算
                 def calc_logic(row):
                     m_count = sum(1 for v in vol_cols if row[v] >= 6)
                     first_win = "未達標"
@@ -80,26 +76,28 @@ if uploaded_file:
 
                 result_df[["達標次數", "可領獎", "首度領獎批次"]] = result_df.apply(calc_logic, axis=1)
                 
-                # 排序與選取
-                cols = [class_col, no_col, target_col] + vol_cols + ["達標次數", "可領獎", "首度領獎批次"]
-                final_df = result_df[[c for c in cols if c in result_df.columns]].sort_values(by=[class_col, no_col])
+                # 排序與最終輸出
+                final_cols = [class_col, no_col, target_col] + vol_cols + ["達標次數", "可領獎", "首度領獎批次"]
+                # 過濾出實際存在的欄位
+                final_cols = [c for c in final_cols if c in result_df.columns]
+                final_df = result_df[final_cols].sort_values(by=[class_col, no_col])
                 
-                st.write(f"### 總名單預覽 (共 {len(final_df)} 人)")
+                st.write(f"### 完整領獎名單 (共 {len(final_df)} 人)")
                 st.dataframe(final_df)
 
-                # 提供下載
+                # 下載按鈕
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     final_df.to_excel(writer, index=False)
                 
                 st.download_button(
-                    label="📥 下載完整領獎名單",
+                    label="📥 下載整理結果",
                     data=output.getvalue(),
-                    file_name="全名單領獎整理結果.xlsx",
+                    file_name="領獎整理全名單.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             else:
-                st.warning("檔案中沒有資料。")
+                st.warning("查無資料。")
 
     except Exception as e:
         st.error(f"發生錯誤：{e}")
