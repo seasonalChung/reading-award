@@ -3,7 +3,7 @@ import pandas as pd
 import io
 
 st.set_page_config(page_title="閱讀領獎名單整理", layout="wide")
-st.title("📚 閱讀領獎自動化系統 (全名單合併修正版)")
+st.title("📚 閱讀領獎自動化系統 (獲獎名單專用)")
 
 uploaded_file = st.file_uploader("請上傳 Excel 檔案", type=["xlsx"])
 
@@ -18,7 +18,7 @@ if uploaded_file:
         class_col = st.text_input("班級欄位", value="班級")
         no_col = st.text_input("座號欄位", value="座號")
 
-        if st.button("開始執行整理"):
+        if st.button("生成獲獎名單"):
             result_df = None
             
             for sheet_name, df in all_sheets.items():
@@ -41,14 +41,13 @@ if uploaded_file:
                     if result_df is None:
                         result_df = current_df
                     else:
-                        # 使用 outer join 合併，並自定義後綴以利辨識
+                        # 使用 outer join 合併
                         result_df = pd.merge(result_df, current_df, on=target_col, how='outer', suffixes=('', '_drop'))
                         
-                        # 如果出現了重複的班級/座號，用新資料補齊舊資料的空缺
+                        # 補齊班級/座號
                         if f"{class_col}_drop" in result_df.columns:
                             result_df[class_col] = result_df[class_col].fillna(result_df[f"{class_col}_drop"])
                             result_df[no_col] = result_df[no_col].fillna(result_df[f"{no_col}_drop"])
-                            # 刪除帶有後綴的冗餘欄位
                             result_df = result_df.drop(columns=[f"{class_col}_drop", f"{no_col}_drop"])
 
             if result_df is not None and not result_df.empty:
@@ -72,30 +71,35 @@ if uploaded_file:
                             if count == 3:
                                 first_win = v.replace("區間本數", "")
                                 break
-                    return pd.Series([m_count, "是" if m_count >= 3 else "否", first_win])
+                    return pd.Series([m_count, first_win])
 
-                result_df[["達標次數", "可領獎", "首度領獎批次"]] = result_df.apply(calc_logic, axis=1)
+                result_df[["達標次數", "首度領獎批次"]] = result_df.apply(calc_logic, axis=1)
                 
-                # 排序與最終輸出
-                final_cols = [class_col, no_col, target_col] + vol_cols + ["達標次數", "可領獎", "首度領獎批次"]
-                # 過濾出實際存在的欄位
-                final_cols = [c for c in final_cols if c in result_df.columns]
-                final_df = result_df[final_cols].sort_values(by=[class_col, no_col])
+                # --- 關鍵修正：只保留達標次數 >= 3 的同學 ---
+                winner_df = result_df[result_df["達標次數"] >= 3].copy()
                 
-                st.write(f"### 完整領獎名單 (共 {len(final_df)} 人)")
-                st.dataframe(final_df)
+                if not winner_df.empty:
+                    # 排序與最終輸出欄位 (移除「可領獎」)
+                    final_cols = [class_col, no_col, target_col] + vol_cols + ["達標次數", "首度領獎批次"]
+                    final_cols = [c for c in final_cols if c in winner_df.columns]
+                    winner_df = winner_df[final_cols].sort_values(by=[class_col, no_col])
+                    
+                    st.write(f"### 🎉 獲獎學生名單 (共 {len(winner_df)} 人)")
+                    st.dataframe(winner_df)
 
-                # 下載按鈕
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    final_df.to_excel(writer, index=False)
-                
-                st.download_button(
-                    label="📥 下載整理結果",
-                    data=output.getvalue(),
-                    file_name="領獎整理全名單.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                    # 下載按鈕
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        winner_df.to_excel(writer, index=False)
+                    
+                    st.download_button(
+                        label="📥 下載獲獎學生清單",
+                        data=output.getvalue(),
+                        file_name="114年度閱讀獲獎名單.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    st.warning("目前沒有學生符合領獎資格 (未有學生達成 3 個區間本數 >= 6)。")
             else:
                 st.warning("查無資料。")
 
